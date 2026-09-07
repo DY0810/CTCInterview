@@ -22,3 +22,10 @@ npm-debug.log*
 .idea/
 .vscode/
 *.swp
+
+# Local-only Compose port remap (never commit)
+docker-compose.override.yml
+
+# Working files for this challenge - not part of the submission
+plans/
+notes/
