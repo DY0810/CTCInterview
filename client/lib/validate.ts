@@ -51,6 +51,31 @@ export interface RestaurantInput {
 const MAX_NAME_LENGTH = 200;
 
 /**
+ * Reject a NUL character in any of `fields`.
+ *
+ * One rule for every text field, because it is a property of the column and not
+ * of any one of them: a `text` column cannot hold U+0000, and Postgres rejects
+ * the write with an error this API does not map - a 500 for something the
+ * caller sent. `"a\u0000b"` is perfectly legal JSON, and it survives every
+ * other check here (non-empty once trimmed, well under any length cap), so
+ * nothing else stops it. The caller sent something the column cannot store,
+ * which is a 400.
+ *
+ * Shared by both validators so `notes` cannot drift from `name` on a rule that
+ * belongs to the storage, not to the field.
+ */
+function checkNoNul(
+  fields: Record<string, unknown>,
+  problems: string[]
+): void {
+  for (const [field, value] of Object.entries(fields)) {
+    if (typeof value === 'string' && value.includes('\u0000')) {
+      problems.push(`${field} must not contain a NUL character`);
+    }
+  }
+}
+
+/**
  * Optional free text: absent or null -> null, a string -> trimmed. Anything
  * else records a problem and is dropped.
  */
@@ -101,18 +126,7 @@ export function parseRestaurantBody(payload: unknown): RestaurantInput {
 
   const problems: string[] = [];
 
-  // One rule for every text field, because it is a property of the column and
-  // not of any one of them: a `text` column cannot hold U+0000, and Postgres
-  // rejects the write with an error this API does not map - a 500 for something
-  // the caller sent. `"a\u0000b"` is perfectly legal JSON, and it survives the
-  // checks below (non-empty once trimmed, well under the length cap), so
-  // nothing else stops it. The caller sent something the column cannot store,
-  // which is a 400.
-  for (const [field, value] of Object.entries({ name, cuisine, address })) {
-    if (typeof value === 'string' && value.includes('\u0000')) {
-      problems.push(`${field} must not contain a NUL character`);
-    }
-  }
+  checkNoNul({ name, cuisine, address }, problems);
 
   let cleanName = '';
   if (typeof name !== 'string') {
@@ -161,4 +175,138 @@ export function parseRestaurantBody(payload: unknown): RestaurantInput {
     address: cleanAddress,
     rating: cleanRating,
   };
+}
+
+/** A visit body that has been checked and is safe to store. */
+export interface VisitInput {
+  date: string;
+  amountSpent: number | null;
+  notes: string | null;
+}
+
+/** NUMERIC(10, 2) holds ten digits, two of them after the point. */
+const MAX_AMOUNT = 99999999.99;
+
+/** Room for a real note about a meal, without letting the column grow unbounded. */
+const MAX_NOTES_LENGTH = 1000;
+
+/**
+ * "YYYY-MM-DD" -> does it name a day that actually exists?
+ *
+ * The shape test alone isn't enough: `2026-02-30` and `2026-13-01` both match
+ * the pattern, and `new Date` silently rolls them forward to March 2nd and
+ * January 2027 rather than rejecting them - so the stored date would be a day
+ * the caller never sent. Round-tripping the three parts back out is what
+ * catches that, and it also rejects month 00 and day 00, which roll backwards.
+ *
+ * Built in UTC purely to keep this a calendar calculation; the local-time
+ * constructor is the one that can shift a day across a timezone. The validated
+ * string goes to Postgres as a string, never as a Date.
+ */
+function isCalendarDate(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (match === null) return false;
+
+  const [, year, month, day] = match.map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year &&
+    date.getUTCMonth() === month - 1 &&
+    date.getUTCDate() === day
+  );
+}
+
+/**
+ * Validate a visit body for POST /api/restaurants/:id/visits.
+ *
+ * `restaurantId` is deliberately not read from the body - it comes from the
+ * URL, which is the only copy. Accepting it in both places invites a request
+ * whose two halves disagree, and then a rule about which one wins.
+ *
+ * Throws ValidationError (400) listing every problem, same as the restaurant
+ * validator above.
+ */
+export function parseVisitBody(payload: unknown): VisitInput {
+  // Same container guard as parseRestaurantBody: `null`, `[]` and `"foo"` are
+  // all valid JSON, and destructuring the first one throws a TypeError.
+  if (
+    typeof payload !== 'object' ||
+    payload === null ||
+    Array.isArray(payload)
+  ) {
+    throw new ValidationError(['body must be a JSON object']);
+  }
+
+  // Unknown fields ignored rather than rejected, matching the restaurant body.
+  const { date, amountSpent, notes } = payload as Record<string, unknown>;
+
+  const problems: string[] = [];
+
+  // Only `notes` here: a NUL in `date` is already caught by isCalendarDate
+  // below, and reporting it twice describes one problem as two.
+  checkNoNul({ notes }, problems);
+
+  // `date` is required: a visit that records money but not when it was spent is
+  // useless for the one question this app exists to answer. The column is NOT
+  // NULL anyway, so skipping the check would only move the failure to a 23502
+  // the caller can't read.
+  //
+  // A date in the future is allowed. The server cannot know what "today" is for
+  // the caller - it is a day behind or ahead of most of the planet - so a
+  // not-in-the-future rule would reject a legitimate entry logged this evening
+  // from the wrong side of a date line. Booking a table for next week and
+  // logging it now is also a reasonable thing to want. Dates that cannot exist
+  // are a different question, and isCalendarDate answers that one.
+  let cleanDate = '';
+  if (typeof date !== 'string') {
+    problems.push(
+      date === undefined ? 'date is required' : 'date must be a string'
+    );
+  } else if (!isCalendarDate(date)) {
+    problems.push('date must be a real calendar date in YYYY-MM-DD form');
+  } else {
+    cleanDate = date;
+  }
+
+  // Optional, and an explicit null is accepted as well as absent: you can
+  // remember eating somewhere without remembering the bill, and the column is
+  // nullable.
+  let cleanAmount: number | null = null;
+  if (amountSpent !== undefined && amountSpent !== null) {
+    if (typeof amountSpent !== 'number' || !Number.isFinite(amountSpent)) {
+      // Rejects the string "42.50" along with NaN and Infinity, the same rule
+      // `rating` uses. JSON has a number type; a caller sending a string means
+      // something else by it.
+      problems.push('amountSpent must be a number');
+    } else if (amountSpent < 0) {
+      // Also enforced by the CHECK in migration 002. Here it is a 400 the
+      // caller can read, rather than a constraint violation.
+      problems.push('amountSpent must not be negative');
+    } else if (amountSpent > MAX_AMOUNT) {
+      // Past this, NUMERIC(10, 2) overflows and Postgres raises 22003.
+      problems.push(`amountSpent must be ${MAX_AMOUNT} or less`);
+    } else if (Number(amountSpent.toFixed(2)) !== amountSpent) {
+      // Rejected, not rounded. The column keeps two decimals, so 12.999 would
+      // be stored as 13.00: the 201 would hand back a number the caller never
+      // sent, and every total after it would disagree with the receipt by a
+      // cent nobody can trace. Money is the field where quietly changing the
+      // value is worse than refusing it, so the caller decides how to round.
+      // Comparing through toFixed also catches 0.1 + 0.2 and 1e-7, which a
+      // naive `value * 100` check does not.
+      problems.push('amountSpent must have at most 2 decimal places');
+    } else {
+      cleanAmount = amountSpent;
+    }
+  }
+
+  const cleanNotes = optionalText(notes, 'notes', problems);
+  if (cleanNotes !== null && cleanNotes.length > MAX_NOTES_LENGTH) {
+    problems.push(`notes must be ${MAX_NOTES_LENGTH} characters or fewer`);
+  }
+
+  if (problems.length > 0) {
+    throw new ValidationError(problems);
+  }
+
+  return { date: cleanDate, amountSpent: cleanAmount, notes: cleanNotes };
 }

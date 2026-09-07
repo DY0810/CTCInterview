@@ -53,6 +53,22 @@ export interface Visit {
   createdAt: string;
 }
 
+/**
+ * The body of GET /api/restaurants/:id/visits.
+ *
+ * An object rather than a bare array of visits, because the total has to live
+ * somewhere and a JSON array has no room for it. Sending it alongside also
+ * means the client never re-derives it: the sum of a page of visits is not the
+ * sum of all of them, and Postgres adds NUMERIC exactly while JavaScript adds
+ * 10.10 + 20.20 and gets 30.299999999999997. Same reason the shape can grow -
+ * a visit count or a date range goes in as another key, not another endpoint.
+ */
+export interface VisitsResponse {
+  visits: Visit[];
+  /** Sum of every `amountSpent` here, 0 when there are none. Never null. */
+  totalSpent: number;
+}
+
 // --- row mappers -------------------------------------------------------------
 
 /** NUMERIC -> number, preserving null. */
