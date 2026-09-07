@@ -12,6 +12,12 @@
  *   - `NUMERIC` columns (`rating`, `amountSpent`) arrive as **strings**
  *     ("4.5", not 4.5). node-postgres does this on purpose - NUMERIC has more
  *     precision than a JS number, so parsing it automatically could lose data.
+ *   - `pg` does **no** case conversion: a row key is exactly the identifier
+ *     Postgres reports. `created_at` is declared unquoted in the migration, so
+ *     the key is `created_at`, not the camelCase name the API returns. Reading
+ *     the wrong one gives `undefined`, which stringifies to the literal text
+ *     "undefined" in an otherwise healthy 200. `"restaurantId"` is declared
+ *     quoted, so that key really is camelCase.
  *   - `DATE` and `TIMESTAMPTZ` columns arrive as **Date objects**, which
  *     `JSON.stringify` turns into full ISO timestamps. For a calendar date like
  *     `visits.date` that's wrong twice over: it invents a time, and it shifts
@@ -47,6 +53,22 @@ export interface Visit {
   createdAt: string;
 }
 
+/**
+ * The body of GET /api/restaurants/:id/visits.
+ *
+ * An object rather than a bare array of visits, because the total has to live
+ * somewhere and a JSON array has no room for it. Sending it alongside also
+ * means the client never re-derives it: the sum of a page of visits is not the
+ * sum of all of them, and Postgres adds NUMERIC exactly while JavaScript adds
+ * 10.10 + 20.20 and gets 30.299999999999997. Same reason the shape can grow -
+ * a visit count or a date range goes in as another key, not another endpoint.
+ */
+export interface VisitsResponse {
+  visits: Visit[];
+  /** Sum of every `amountSpent` here, 0 when there are none. Never null. */
+  totalSpent: number;
+}
+
 // --- row mappers -------------------------------------------------------------
 
 /** NUMERIC -> number, preserving null. */
@@ -80,7 +102,7 @@ export function toRestaurant(row: Record<string, unknown>): Restaurant {
     cuisine: (row.cuisine as string | null) ?? null,
     address: (row.address as string | null) ?? null,
     rating: num(row.rating),
-    createdAt: isoTimestamp(row.createdAt),
+    createdAt: isoTimestamp(row.created_at),
   };
 }
 
@@ -92,6 +114,6 @@ export function toVisit(row: Record<string, unknown>): Visit {
     date: dateOnly(row.date),
     amountSpent: num(row.amountSpent),
     notes: (row.notes as string | null) ?? null,
-    createdAt: isoTimestamp(row.createdAt),
+    createdAt: isoTimestamp(row.created_at),
   };
 }
