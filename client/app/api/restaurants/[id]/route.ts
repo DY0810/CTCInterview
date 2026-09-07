@@ -35,26 +35,65 @@ export async function GET(_req: Request, { params }: Params) {
 
 /**
  * PUT /api/restaurants/:id
- * Update an existing restaurant.
+ * Update an existing restaurant, or 404 if it doesn't exist.
  *
- * TODO (A2): implement. Update the row matching :id and return the updated
- * record (or 404 if it doesn't exist). Validate the body the same way POST does.
+ * Full replacement, not a merge: every mutable field is written from the body,
+ * so a field the caller omits becomes null rather than keeping its old value.
+ * That is what PUT means - PATCH is the verb for partial updates, and the
+ * contract only asks for PUT. It also keeps this handler's body handling
+ * identical to POST's, so the two can't drift.
+ *
+ * TODO (A3): validate the body the same way POST does.
  */
-export async function PUT(_req: Request, _ctx: Params) {
-  return NextResponse.json({ error: 'Not implemented' }, { status: 501 });
+export async function PUT(req: Request, { params }: Params) {
+  try {
+    const { name, cuisine, address, rating } = await req.json();
+
+    const { rows } = await pool.query(
+      'UPDATE restaurants SET name = $1, cuisine = $2, address = $3, rating = $4 ' +
+        'WHERE id = $5 RETURNING *',
+      [name ?? null, cuisine ?? null, address ?? null, rating ?? null, params.id]
+    );
+
+    // No row matched the id, so there was nothing to update. Testing `rows`
+    // rather than `rowCount` also guards the `rows[0]` dereference below, and
+    // matches how the GET handler above answers the same question.
+    if (rows.length === 0) {
+      return NextResponse.json({ error: 'Restaurant not found' }, { status: 404 });
+    }
+
+    return NextResponse.json(toRestaurant(rows[0]));
+  } catch (err) {
+    return handleError(err);
+  }
 }
 
 /**
  * DELETE /api/restaurants/:id
- * Delete a restaurant.
- *
- * TODO (A2): implement. Delete the row matching :id and return 204 (or 404
- * if it doesn't exist).
- *
- * Worth noticing: the migration already made a call about what happens to that
- * restaurant's visits. Go read it. If you disagree with it, say so in your
- * write-up.
+ * Delete a restaurant. 204 on success, 404 if it doesn't exist.
  */
-export async function DELETE(_req: Request, _ctx: Params) {
-  return NextResponse.json({ error: 'Not implemented' }, { status: 501 });
+export async function DELETE(_req: Request, { params }: Params) {
+  try {
+    // Deliberate, and worth saying out loud: the migration declares
+    // visits."restaurantId" ... ON DELETE CASCADE, so this also erases every
+    // visit for the restaurant - the app's only record of money spent. I'd
+    // normally argue for a soft delete or a 409 when visits exist, but the
+    // Part A contract allows only 204 and 404 on this route, so neither is
+    // available. The contract made the call, not an oversight. See WriteUp.md.
+    const { rowCount } = await pool.query(
+      'DELETE FROM restaurants WHERE id = $1',
+      [params.id]
+    );
+
+    if (rowCount === 0) {
+      return NextResponse.json({ error: 'Restaurant not found' }, { status: 404 });
+    }
+
+    // A 204 must carry no body. NextResponse.json() always writes one, and the
+    // Response constructor rejects a body on a 204 by throwing a TypeError -
+    // which the catch below would turn into a 500. Construct it directly.
+    return new NextResponse(null, { status: 204 });
+  } catch (err) {
+    return handleError(err);
+  }
 }

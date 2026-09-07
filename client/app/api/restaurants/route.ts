@@ -31,13 +31,28 @@ export async function GET() {
  * POST /api/restaurants
  * Create a new restaurant.
  *
- * TODO (A2): implement. Read the restaurant fields from the request body,
- * insert a row, and return the created restaurant with a 201 status.
- *
  * TODO (A3): validate before you insert. Nothing validates anything today, so
  * `rating` happily accepts 6. Decide what valid means for each field and reject
  * bad bodies with a 400 rather than letting them reach the database.
  */
-export async function POST(_req: Request) {
-  return NextResponse.json({ error: 'Not implemented' }, { status: 501 });
+export async function POST(req: Request) {
+  try {
+    const { name, cuisine, address, rating } = await req.json();
+
+    // $1 placeholders, not interpolation: these values come from the request,
+    // and the difference between a parameter and a string concatenation is the
+    // difference between a bind and a SQL injection.
+    const { rows } = await pool.query(
+      'INSERT INTO restaurants (name, cuisine, address, rating) ' +
+        'VALUES ($1, $2, $3, $4) RETURNING *',
+      [name ?? null, cuisine ?? null, address ?? null, rating ?? null]
+    );
+
+    // RETURNING * hands back the whole row - including the database-generated
+    // id and created_at - so there's no second SELECT. It still needs mapping:
+    // rating arrives as a string and created_at as a Date.
+    return NextResponse.json(toRestaurant(rows[0]), { status: 201 });
+  } catch (err) {
+    return handleError(err);
+  }
 }
