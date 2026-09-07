@@ -4,32 +4,21 @@ import { handleError, NotFoundError } from '@/lib/errors';
 import { toVisit, type VisitsResponse } from '@/lib/types';
 import { parseId, parseVisitBody } from '@/lib/validate';
 
-// These handlers read live data. Next 14 freezes a GET route handler into a
-// static response at build time unless something marks it dynamic, and `npm run
-// dev` never shows it - the two restaurant route files are only safe today
-// because of which other methods they happen to export. This file exports POST,
-// so it would be safe by the same accident; the line is here so it stays safe
-// when someone edits the method mix.
+// Keep database reads live in production as well as development.
 export const dynamic = 'force-dynamic';
 
 type Params = { params: { id: string } };
 
 /**
- * The only failure either handler reports about the restaurant in the URL,
- * whether the id was unusable or simply matched nothing. Same wording as the
- * restaurant routes, and it avoids leaking which ids exist.
+ * Unusable and missing restaurant IDs use the same contract response.
  */
 const notFound = () => new NotFoundError('Restaurant not found');
 
 /**
  * The restaurant id from the URL, or a 404.
  *
- * Both handlers hang off a restaurant that has to exist, so both check it the
- * same way and in the same place. For POST that check is worth the round trip
- * rather than letting the insert fail: the foreign key raises 23503, which
- * `handleError` maps to a 400 - technically true, but it tells the caller their
- * body was wrong when the URL was. The FK is still the backstop if the
- * restaurant is deleted between this SELECT and the INSERT.
+ * Check the parent before reading a POST body, preserving the existing 404
+ * precedence. The INSERT rechecks and locks the parent before writing.
  */
 async function requireRestaurantId(raw: string): Promise<number> {
   const id = parseId(raw);
@@ -51,35 +40,24 @@ async function requireRestaurantId(raw: string): Promise<number> {
  */
 export async function GET(_req: Request, { params }: Params) {
   try {
-    const id = await requireRestaurantId(params.id);
+    const id = parseId(params.id);
+    if (id === null) throw notFound();
 
-    const [{ rows }, { rows: totals }] = await Promise.all([
-      // `id DESC` is not decoration: two visits on the same day are otherwise
-      // returned in whatever order the planner feels like, so the list would
-      // reshuffle between refreshes.
-      pool.query(
-        'SELECT * FROM visits WHERE "restaurantId" = $1 ORDER BY date DESC, id DESC',
-        [id]
-      ),
-      // COALESCE because SUM over zero rows is null, not 0 - a restaurant
-      // nobody has visited has spent nothing, and `"totalSpent": null` would
-      // make every caller write the same defaulting code.
-      pool.query(
-        'SELECT COALESCE(SUM("amountSpent"), 0) AS total FROM visits WHERE "restaurantId" = $1',
-        [id]
-      ),
-    ]);
+    // One statement sees one snapshot: the parent, visits and total cannot
+    // disagree if a write commits during the request. An empty parent has one
+    // joined row with a null visit id; a missing parent has no rows at all.
+    const { rows } = await pool.query(
+      'SELECT v.*, COALESCE(SUM(v."amountSpent") OVER (), 0) AS total ' +
+        'FROM restaurants r LEFT JOIN visits v ON v."restaurantId" = r.id ' +
+        'WHERE r.id = $1 ORDER BY v.date DESC, v.id DESC',
+      [id]
+    );
+    if (rows.length === 0) throw notFound();
 
     const payload: VisitsResponse = {
-      // Raw rows don't match the contract: `date` arrives as a Date built at
-      // local midnight and `amountSpent` as a string. See lib/types.ts.
-      visits: rows.map(toVisit),
-      // Number() because pg hands back NUMERIC - SUM included - as a string.
-      // Without it `totalSpent` ships as "162.25" and the next thing that adds
-      // to it concatenates instead.
-      totalSpent: Number(totals[0].total),
+      visits: rows.filter((row) => row.id !== null).map(toVisit),
+      totalSpent: Number(rows[0].total),
     };
-
     return NextResponse.json(payload);
   } catch (err) {
     return handleError(err);
@@ -105,9 +83,13 @@ export async function POST(req: Request, { params }: Params) {
     // side. $1 placeholders, not interpolation, for every request value.
     const { rows } = await pool.query(
       'INSERT INTO visits ("restaurantId", date, "amountSpent", notes) ' +
-        'VALUES ($1, $2, $3, $4) RETURNING *',
+        'SELECT parent.id, $2, $3, $4 FROM ' +
+        '(SELECT id FROM restaurants WHERE id = $1 FOR KEY SHARE) parent RETURNING *',
       [id, date, amountSpent, notes]
     );
+    // Deleted since the first check: no insert. Otherwise the row lock keeps
+    // the parent from disappearing until this statement has finished.
+    if (rows.length === 0) throw notFound();
 
     return NextResponse.json(toVisit(rows[0]), { status: 201 });
   } catch (err) {

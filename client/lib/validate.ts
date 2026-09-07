@@ -137,7 +137,7 @@ export function parseRestaurantBody(payload: unknown): RestaurantInput {
     const trimmed = name.trim();
     if (trimmed === '') {
       problems.push('name must not be empty');
-    } else if (trimmed.length > MAX_NAME_LENGTH) {
+    } else if ([...trimmed].length > MAX_NAME_LENGTH) {
       problems.push(`name must be ${MAX_NAME_LENGTH} characters or fewer`);
     } else {
       cleanName = trimmed;
@@ -208,7 +208,10 @@ function isCalendarDate(value: string): boolean {
   if (match === null) return false;
 
   const [, year, month, day] = match.map(Number);
-  const date = new Date(Date.UTC(year, month - 1, day));
+  if (year === 0) return false;
+  // Date.UTC treats years 0-99 as 1900-1999; setUTCFullYear does not.
+  const date = new Date(0);
+  date.setUTCFullYear(year, month - 1, day);
   return (
     date.getUTCFullYear() === year &&
     date.getUTCMonth() === month - 1 &&
@@ -300,7 +303,7 @@ export function parseVisitBody(payload: unknown): VisitInput {
   }
 
   const cleanNotes = optionalText(notes, 'notes', problems);
-  if (cleanNotes !== null && cleanNotes.length > MAX_NOTES_LENGTH) {
+  if (cleanNotes !== null && [...cleanNotes].length > MAX_NOTES_LENGTH) {
     problems.push(`notes must be ${MAX_NOTES_LENGTH} characters or fewer`);
   }
 

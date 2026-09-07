@@ -1,8 +1,8 @@
 # Feeding Brennen
 
 A fullstack app for tracking restaurants, visits, and how much Brennen spends eating
-out. This is a **take-home challenge starter** - the structure, database layer, and a
-couple of read endpoints are wired up for you. The rest is yours to build.
+out. This submission implements the restaurant API and visit logging from the
+take-home challenge. See [WriteUp.md](./WriteUp.md) for decisions and verification.
 
 ## Stack
 
@@ -24,7 +24,7 @@ backend server: the API lives in route handlers under `app/api/`.
 ├── SETUP.md           # setup & troubleshooting
 ├── HOW-IT-WORKS.md    # how the repo fits together (start here if you're new)
 ├── CHALLENGE.md       # the brief: what to build and how it's evaluated
-└── WriteUp.md         # your write-up - a skeleton to fill in, submitted with your work
+└── WriteUp.md         # decisions, route examples, and verification
 ```
 
 Inside `client/`: the UI is in `app/` (pages) and the REST API is in
@@ -33,8 +33,7 @@ seed script; `lib/` has the frontend fetch client and a shared error helper.
 
 ## Quick start
 
-**Start by using this template repo** and keep your repo public
-**public** - the link to it is what you submit. Then install
+Install
 [Docker Desktop](https://www.docker.com/products/docker-desktop/) and make sure
 it's open and running.
 
@@ -55,14 +54,13 @@ When you're done, push your work to your fork and submit the link to it on the
 **On Windows:** run everything from WSL2 or Git Bash - `setup.sh` won't run in
 PowerShell or `cmd.exe`. [SETUP.md](./SETUP.md#on-windows) has the details.
 
-**Heads up:** on a fresh clone, http://localhost:3000 shows a Next.js error
-screen (`restaurants.map is not a function`). That's expected - it's the planted
-bug in Part A1, not a broken setup.
+The home page lists restaurants. Open a restaurant to see its visits and total
+spending, or log a new visit.
 
-## Your task
+## Challenge
 
-This repo intentionally stops short of a finished product. The structure,
-database layer, and read endpoints work; the rest is yours.
+The original brief is preserved in [CHALLENGE.md](./CHALLENGE.md). Its references
+to broken queries and unimplemented handlers describe the starter, not this version.
 
 **Read [CHALLENGE.md](./CHALLENGE.md)** for the full brief: what to build, how
 to verify your work, and exactly how submissions are evaluated.
@@ -82,6 +80,26 @@ The challenge is in two halves:
   the feature, the routes, the data shape, the UI. There's no list to pick from
   and no answer key - build the thing you find interesting.
 
-There's no test suite - verify your endpoints yourself against your running
-database (see CHALLENGE.md). Go small, finish what you start, and write up why
-you built what you built. Have fun.
+## Tests
+
+From `client/`:
+
+```bash
+npm ci
+npm test
+npm run lint
+npm run build
+```
+
+The tests use Node's built-in test runner and the existing `tsx` dependency.
+To exercise a running local app and its database:
+
+```bash
+TEST_API_URL=http://127.0.0.1:3000 npm run test:api
+```
+
+The HTTP tests create temporary records and delete only those records, including
+when a test fails. They never wipe or reseed the database. They require an
+explicit loopback URL to prevent accidental use against a hosted app.
+GitHub Actions runs both suites, four timezone checks, repeat migrations, lint,
+and a production build with an isolated PostgreSQL database.

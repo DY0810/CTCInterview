@@ -78,7 +78,11 @@ function num(value: unknown): number | null {
 
 /** TIMESTAMPTZ -> ISO 8601 string. */
 function isoTimestamp(value: unknown): string {
-  return value instanceof Date ? value.toISOString() : String(value);
+  const date = value instanceof Date ? value : typeof value === 'string' ? new Date(value) : null;
+  if (date === null || !Number.isFinite(date.getTime())) {
+    throw new Error('Invalid database timestamp');
+  }
+  return date.toISOString();
 }
 
 /**
@@ -91,7 +95,8 @@ function dateOnly(value: unknown): string {
   if (!(value instanceof Date)) return String(value);
   const month = String(value.getMonth() + 1).padStart(2, '0');
   const day = String(value.getDate()).padStart(2, '0');
-  return `${value.getFullYear()}-${month}-${day}`;
+  const year = String(value.getFullYear()).padStart(4, '0');
+  return `${year}-${month}-${day}`;
 }
 
 /** Convert a `restaurants` row into the shape the API returns. */

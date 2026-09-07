@@ -49,7 +49,9 @@ cd feeding-brennen
 ```
 
 That script starts PostgreSQL in Docker, installs dependencies, creates the
-tables, and loads sample data. It's safe to re-run at any point.
+tables, and loads sample data. **Re-running it replaces existing restaurants and
+visits with the sample data.** Use `cd client && npm run migrate` to apply schema
+changes without replacing your records.
 
 Then start the app:
 
@@ -66,16 +68,13 @@ curl http://localhost:3000/api/health
 # {"status":"ok"}
 ```
 
-### What you should see before you've fixed anything
+### What you should see
 
-**http://localhost:3000 will show a Next.js error screen reading
-`restaurants.map is not a function`. That is expected - your setup is fine.**
+**http://localhost:3000 lists the five sample restaurants.** Open a restaurant
+to view its visits and spending total, and use the form to add a visit.
 
-That's the planted bug in Part A1 surfacing. `/api/restaurants` returns a `500`,
-the home page gets an error object instead of an array, and calling `.map` on it
-throws. The error points at `app/page.tsx`, but the page is not where the bug
-is - the failing query is in the route handler. Fix A1 and the page renders the
-seeded restaurants.
+The original starter showed `restaurants.map is not a function`; that bug is
+fixed in this version.
 
 Anything else - `/api/health` not returning `{"status":"ok"}`, a connection
 error, a blank terminal - is a real setup problem. See Troubleshooting below.
@@ -99,7 +98,7 @@ You don't need this to get started - it's here so nothing is a black box.
 | -------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | Start the database   | `docker compose up -d`           | Runs PostgreSQL 16 on `localhost:5432`, pre-configured with the right user, password, and database name. |
 | Install dependencies | `npm install` (in `client/`)     | Standard.                                                                                                |
-| Create tables        | `npm run migrate` (in `client/`) | Applies `client/db/migrations/*.sql`. Prints `Applied 1 migration(s).`                                   |
+| Create tables        | `npm run migrate` (in `client/`) | Applies `client/db/migrations/*.sql`. Prints `Applied 2 migration(s).`                                   |
 | Load sample data     | `npm run seed` (in `client/`)    | Loads 5 restaurants and 3 visits. Prints `Seeded 5 restaurants and 3 visits.`                            |
 
 Run any of them individually whenever you need to - re-seed after you've made a
@@ -148,11 +147,26 @@ The app can't reach PostgreSQL.
 
 ### Docker: port 5432 already allocated
 
-Another Postgres (often a native install) already owns port 5432, so the
-container can't bind it. Either stop the other one (e.g.
-`brew services stop postgresql@16`), or remap the container: change the `ports`
-line in `docker-compose.yml` to `"5433:5432"`, then create `client/.env` with a
-`DATABASE_URL` using port `5433`.
+Keep the other database running. With Docker Compose 2.24.4 or later, use the
+gitignored `docker-compose.override.yml`:
+
+```yaml
+services:
+  db:
+    ports: !override
+      - "127.0.0.1:5433:5432"
+```
+
+`!override` replaces the original port list. Without it, Compose can append
+5433 while leaving 5432 published too. Then set this in `client/.env`:
+
+```dotenv
+DATABASE_URL=postgresql://postgres:postgres@localhost:5433/feeding_brennen
+```
+
+Check `docker compose config` before starting it: only host port 5433 should
+be published. If your Compose version does not support `!override`, edit the
+original `ports` entry locally instead of using an additive override.
 
 ### Docker: `container name ... is already in use`
 
