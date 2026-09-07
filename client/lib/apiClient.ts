@@ -51,7 +51,7 @@ export async function getRestaurants(): Promise<Restaurant[]> {
 export function getRestaurant(
   id: number | string
 ): Promise<Restaurant | null> {
-  return getJson<Restaurant>(`/api/restaurants/${id}`);
+  return getJson<Restaurant>(`/api/restaurants/${encodeURIComponent(String(id))}`);
 }
 
 /**
@@ -63,5 +63,5 @@ export function getRestaurant(
 export function getVisits(
   id: number | string
 ): Promise<VisitsResponse | null> {
-  return getJson<VisitsResponse>(`/api/restaurants/${id}/visits`);
+  return getJson<VisitsResponse>(`/api/restaurants/${encodeURIComponent(String(id))}/visits`);
 }

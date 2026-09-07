@@ -32,13 +32,12 @@ spend history. A soft delete or a `409` is better here, but Part A permits only
 
 ## 3. Where did you cut corners?
 
-No automated tests — verification was manual `curl` plus adversarial review
-passes. That is the first thing I'd add with another day.
+Lists are still unpaginated and there is no visit editing or deletion.
+Unknown fields are ignored; only explicitly allowed fields are written.
 
-Next after that: `GET .../visits` runs the list and the `SUM` as two queries in
-`Promise.all`, on two pooled connections with no shared snapshot, so a visit
-inserted between them could land in one and not the other. The rest — a TOCTOU
-window, no pagination, no `error.tsx` — is in Known issues below.
+The follow-up adds repeatable tests, reads visits and their total in one database
+statement, and locks the parent during visit insertion. This closes the two
+concurrent-write gaps in the first version. There are no new dependencies.
 
 ## 4. What should we look at first?
 
@@ -65,6 +64,13 @@ the list reshuffles between refreshes.
 `totalSpent` is always a number, never `null` — `SUM` over zero rows is
 `COALESCE`d to `0`, and it's `Number()`ed because `pg` returns `NUMERIC` as a
 string.
+
+The visits query now uses `LEFT JOIN` and `SUM(...) OVER ()`, so the restaurant,
+visit rows and total come from one database snapshot. A restaurant with no visits
+still returns an empty array and zero; a missing restaurant returns 404.
+The insert rechecks its parent with `FOR KEY SHARE` inside the INSERT statement.
+A deletion after the initial existence check either completes first, producing
+404 without a write, or waits for the insertion to finish.
 
 **`GET /api/restaurants/1/visits`**
 
@@ -147,16 +153,48 @@ Two things worth saying about it:
 insert. The constraint is the guard that survives a second writer — the seed
 script, a `psql` session, whatever calls this database next.
 
-**Nothing to run beyond `./setup.sh`.** No new dependencies; `package.json` is
-untouched.
+**No extra schema setup beyond `./setup.sh`.** No new dependencies. The follow-up
+adds `npm test` and `npm run test:api` scripts.
 
 ## How I verified this
 
-No unit tests — this is `curl` against a running server, plus `next build` and
-`next lint`. Everything below was re-run end to end against a **freshly wiped
-database** (`docker compose down -v && ./setup.sh`), so the output is from the
-5 seeded restaurants and 3 seeded visits and nothing else. Every row created
-during the sweep was deleted afterwards.
+### Repeatable checks
+
+From `client/`:
+
+```bash
+npm ci
+npm test
+npm run lint
+npm run build
+TEST_API_URL=http://127.0.0.1:3000 npm run test:api
+```
+
+The last command needs a running local app. `tests/core.test.ts` covers mapping,
+strict timestamps, IDs, input validation, exact cents, dates, Unicode limits,
+safe errors and controlled write races. `tests/api.test.ts` checks actual HTTP
+responses and persistence against PostgreSQL, including concurrent reads and
+writes. It creates temporary restaurants and removes only those IDs and their
+visits. It never wipes or reseeds a database, and refuses non-loopback URLs.
+
+GitHub Actions runs the core tests under UTC, America/Los_Angeles, Asia/Tokyo and
+Pacific/Kiritimati. It applies migrations twice to a disposable PostgreSQL 16
+database, builds the app, then runs the HTTP suite against `next start` with
+the server timezone set to Asia/Tokyo. This checks live production reads, not
+only development behavior.
+
+The six new correctness tests failed before the follow-up repairs and passed
+afterward. The original naming, NUL, oversized-ID, error-lookup and 204 behaviors
+are now covered as regressions. The page error screen has a generic message
+and a full-page retry; an isolated database outage and recovery were also
+checked in the browser.
+
+### Original manual verification
+
+The output below is the original implementation's recorded `curl` sweep, not a
+claim that these exact IDs or timestamps recur in the new tests. That sweep
+used a freshly rebuilt sample database. **Do not wipe your own database to run
+the new tests.**
 
 ### Part A — every row of the contract table
 
@@ -460,24 +498,18 @@ included.
 
 ## Known issues / what I'd do next
 
-Mine, in the order I'd fix them:
+The follow-up closes the missing-test, inconsistent-total, parent-deletion,
+page-recovery and UTF-16 length issues recorded in the first version. It also
+rejects invalid database timestamps and keeps decoded IDs within one API URL
+segment.
 
-1. **No automated tests.** Everything above is manual. A test suite is the first
-   thing I'd add.
-2. **`GET .../visits` reads the list and the `SUM` on two connections.**
-   `Promise.all` over two `pool.query` calls means two pooled connections and no
-   shared snapshot, so a concurrent insert can land in one and not the other. One
-   query with a window function, or a repeatable-read transaction, fixes it.
-3. **TOCTOU between the parent check and the insert.** If the restaurant is
-   deleted in that window the foreign key still catches it, but `handleError`
-   maps `23503` to `400` — right refusal, wrong status.
-4. **No pagination** on `GET /api/restaurants` or on the visits list.
-5. **No `error.tsx`.** If the API fails, the page renders Next's default error
-   screen rather than something a user can act on.
-6. **The 200-character name cap counts UTF-16 units,** so an all-emoji name is
-   capped at 100. Verified: 100 pizza emoji is a `201`, 101 is a `400`.
-7. **`ON DELETE CASCADE`** — see question 2. Not a bug, a constraint I'd argue
-   with.
+Remaining tradeoffs:
+
+1. **No pagination** on restaurant or visit lists.
+2. **Unknown fields are ignored.** Only named, validated fields are stored.
+3. **Text limits count Unicode code points, not displayed symbols.** A simple
+   emoji counts once; a combined symbol can still contain multiple code points.
+4. **`ON DELETE CASCADE`** remains as described in question 2.
 
 Deliberately not built, rather than run out of time: `DELETE /api/visits/:id`,
 editing a visit, a currency field, and a spend total on the home page.
