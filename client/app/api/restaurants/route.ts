@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { pool } from '@/db/pool';
 import { handleError } from '@/lib/errors';
 import { toRestaurant } from '@/lib/types';
+import { parseRestaurantBody } from '@/lib/validate';
 
 // This handler reads live data. Next 14 freezes a GET route handler into a
 // static response at build time unless something marks it dynamic - and `npm
@@ -29,15 +30,16 @@ export async function GET() {
 
 /**
  * POST /api/restaurants
- * Create a new restaurant.
- *
- * TODO (A3): validate before you insert. Nothing validates anything today, so
- * `rating` happily accepts 6. Decide what valid means for each field and reject
- * bad bodies with a 400 rather than letting them reach the database.
+ * Create a new restaurant. 201 with the created record, or 400 on a bad body.
  */
 export async function POST(req: Request) {
   try {
-    const { name, cuisine, address, rating } = await req.json();
+    // Validate before the database sees anything. Every rejection here is a
+    // 400 written by hand; letting the body through instead means a constraint
+    // failure, whose message quotes the row back at the caller.
+    const { name, cuisine, address, rating } = parseRestaurantBody(
+      await req.json()
+    );
 
     // $1 placeholders, not interpolation: these values come from the request,
     // and the difference between a parameter and a string concatenation is the
@@ -45,7 +47,7 @@ export async function POST(req: Request) {
     const { rows } = await pool.query(
       'INSERT INTO restaurants (name, cuisine, address, rating) ' +
         'VALUES ($1, $2, $3, $4) RETURNING *',
-      [name ?? null, cuisine ?? null, address ?? null, rating ?? null]
+      [name, cuisine, address, rating]
     );
 
     // RETURNING * hands back the whole row - including the database-generated
