@@ -3,6 +3,13 @@ import { pool } from '@/db/pool';
 import { handleError } from '@/lib/errors';
 import { toRestaurant } from '@/lib/types';
 
+// This handler reads live data. Next 14 freezes a GET route handler into a
+// static response at build time unless something marks it dynamic - and `npm
+// run dev` never shows it. Both route files here happen to be safe today only
+// because of which other methods they export (Next's check omits PUT), so this
+// line is what keeps that from silently changing under a future edit.
+export const dynamic = 'force-dynamic';
+
 /**
  * GET /api/restaurants
  * Returns all restaurants.
@@ -10,7 +17,7 @@ import { toRestaurant } from '@/lib/types';
 export async function GET() {
   try {
     const { rows } = await pool.query(
-      'SELECT * FROM restaurants ORDER BY createdAt DESC'
+      'SELECT * FROM restaurants ORDER BY created_at DESC, id DESC'
     );
     // Map every row - raw rows don't match the contract (NUMERIC comes back
     // as a string, timestamps as Date objects). See lib/types.ts.

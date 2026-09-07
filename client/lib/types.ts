@@ -12,6 +12,12 @@
  *   - `NUMERIC` columns (`rating`, `amountSpent`) arrive as **strings**
  *     ("4.5", not 4.5). node-postgres does this on purpose - NUMERIC has more
  *     precision than a JS number, so parsing it automatically could lose data.
+ *   - `pg` does **no** case conversion: a row key is exactly the identifier
+ *     Postgres reports. `created_at` is declared unquoted in the migration, so
+ *     the key is `created_at`, not the camelCase name the API returns. Reading
+ *     the wrong one gives `undefined`, which stringifies to the literal text
+ *     "undefined" in an otherwise healthy 200. `"restaurantId"` is declared
+ *     quoted, so that key really is camelCase.
  *   - `DATE` and `TIMESTAMPTZ` columns arrive as **Date objects**, which
  *     `JSON.stringify` turns into full ISO timestamps. For a calendar date like
  *     `visits.date` that's wrong twice over: it invents a time, and it shifts
@@ -80,7 +86,7 @@ export function toRestaurant(row: Record<string, unknown>): Restaurant {
     cuisine: (row.cuisine as string | null) ?? null,
     address: (row.address as string | null) ?? null,
     rating: num(row.rating),
-    createdAt: isoTimestamp(row.createdAt),
+    createdAt: isoTimestamp(row.created_at),
   };
 }
 
@@ -92,6 +98,6 @@ export function toVisit(row: Record<string, unknown>): Visit {
     date: dateOnly(row.date),
     amountSpent: num(row.amountSpent),
     notes: (row.notes as string | null) ?? null,
-    createdAt: isoTimestamp(row.createdAt),
+    createdAt: isoTimestamp(row.created_at),
   };
 }

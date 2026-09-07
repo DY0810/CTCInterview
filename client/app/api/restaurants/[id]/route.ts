@@ -3,6 +3,13 @@ import { pool } from '@/db/pool';
 import { handleError } from '@/lib/errors';
 import { toRestaurant } from '@/lib/types';
 
+// This handler reads live data. Next 14 freezes a GET route handler into a
+// static response at build time unless something marks it dynamic - and `npm
+// run dev` never shows it. Both route files here happen to be safe today only
+// because of which other methods they export (Next's check omits PUT), so this
+// line is what keeps that from silently changing under a future edit.
+export const dynamic = 'force-dynamic';
+
 type Params = { params: { id: string } };
 
 /**
